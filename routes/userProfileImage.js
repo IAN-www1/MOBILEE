@@ -1,19 +1,23 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const imgur = require('imgur');
 const UserProfileImage = require('../models/UserProfileImage');
+require('dotenv').config();
 
 const router = express.Router();
 
-// Configure storage for uploaded images
+// Set up multer for file uploads (storing files locally temporarily)
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+  destination: function (req, file, cb) {
+    cb(null, process.env.UPLOAD_DIR || 'uploads/'); // Temporary storage
   },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+  filename: function (req, file, cb) {
+    cb(null, `${Date.now()}_${file.originalname}`); // Rename the file to avoid conflicts
   },
 });
+
 const upload = multer({ storage });
 
 // Handle image upload
@@ -24,23 +28,19 @@ router.post('/upload-profile-image', upload.single('image'), async (req, res) =>
       return res.status(400).json({ message: 'User ID is required' });
     }
 
-    // Determine the base URL based on the request origin
-    const baseUrl = req.get('host').includes('10.0.2.2') || req.get('host').includes('localhost')
-      ? 'http://10.0.2.2:3002' // For emulator
-      : 'http://192.168.100.4:3002'; // For physical device
+    // Upload image to Imgur
+    const imgurResponse = await imgur.uploadFile(req.file.path);
+    const profileImageUrl = imgurResponse.link;
 
-    const profileImageUrl = `${baseUrl}/uploads/${req.file.filename}`;
+    // Clean up the local file after uploading to Imgur
+    fs.unlink(req.file.path, (err) => {
+      if (err) {
+        console.error('Failed to delete local file:', err);
+      }
+    });
 
-    let userProfileImage = await UserProfileImage.findOne({ userId });
-    if (userProfileImage) {
-      userProfileImage.profileImageUrl = profileImageUrl;
-    } else {
-      userProfileImage = new UserProfileImage({
-        userId,
-        profileImageUrl,
-      });
-    }
-    await userProfileImage.save();
+    // Save the image URL to MongoDB
+    await _saveImageUrlToMongoDB(userId, profileImageUrl);
 
     res.status(200).json({ filePath: profileImageUrl });
   } catch (error) {
@@ -48,6 +48,40 @@ router.post('/upload-profile-image', upload.single('image'), async (req, res) =>
     res.status(500).json({ message: 'Failed to upload image', error });
   }
 });
+
+// PATCH route to update profile image URL
+router.patch('/upload-profile-image', async (req, res) => {
+  try {
+    const { userId, profileImageUrl } = req.body; // Destructure userId and profileImageUrl from request body
+    if (!userId || !profileImageUrl) {
+      return res.status(400).json({ message: 'User ID and profile image URL are required' });
+    }
+
+    // Find the user profile image document
+    let userProfileImage = await UserProfileImage.findOne({ userId });
+    if (userProfileImage) {
+      // Update the existing profile image URL
+      userProfileImage.profileImageUrl = profileImageUrl;
+    } else {
+      // Create a new user profile image document
+      userProfileImage = new UserProfileImage({
+        userId,
+        profileImageUrl,
+      });
+    }
+
+    // Save the document to MongoDB
+    await userProfileImage.save();
+    console.log('Image URL saved to MongoDB successfully.');
+
+    // Send a success response
+    res.status(200).json({ message: 'Profile image URL updated successfully.' });
+  } catch (error) {
+    console.error('Error updating profile image URL:', error);
+    res.status(500).json({ message: 'Failed to update profile image URL', error: error.message });
+  }
+});
+
 
 // Get profile image for a specific user
 router.get('/profile-image/:userId', async (req, res) => {
@@ -65,5 +99,7 @@ router.get('/profile-image/:userId', async (req, res) => {
     res.status(500).json({ message: 'Failed to retrieve image', error });
   }
 });
+
+
 
 module.exports = router;
