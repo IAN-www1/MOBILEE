@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Favorite = require('../models/Favorite');
+const Item = require('../models/Item'); // Adjust the path according to your folder structure
 const { body, param, validationResult } = require('express-validator');
 
 // Middleware to sanitize and trim request parameters
@@ -34,6 +35,10 @@ router.post('/add', validateFavorite, async (req, res) => {
 
     const favorite = new Favorite({ userId, itemId });
     await favorite.save();
+
+    // Increment the favorite count for the item
+    await Item.findByIdAndUpdate(itemId, { $inc: { favoriteCount: 1 } });
+
     res.status(201).json(favorite);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -60,7 +65,6 @@ router.post('/remove', validateFavorite, async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
 // Get user's favorites
 router.get('/user/:userId', sanitizeParams, [
   param('userId').isMongoId().withMessage('Invalid user ID')
@@ -83,7 +87,6 @@ router.get('/user/:userId', sanitizeParams, [
     res.status(500).json({ message: error.message });
   }
 });
-
 // Remove all favorites for a user
 router.post('/removeAll', [
   body('userId').isMongoId().withMessage('Invalid user ID')
